@@ -1,0 +1,78 @@
+name: Agent reliability gate
+description: Run an agent task suite, compare against a committed baseline, comment on the PR, and fail on regression.
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  suite:
+    description: Path to the suite YAML
+    required: true
+  baseline:
+    description: Path to the committed baseline run JSON
+    required: true
+  trials:
+    description: Trials per task (pass^k)
+    default: "1"
+  concurrency:
+    description: Tasks run in parallel
+    default: "4"
+  extra-args:
+    description: Extra arguments for `agent-harness run` (e.g. --no-judge, --task stripe)
+    default: ""
+  harness-ref:
+    description: Git ref of agent-reliability-harness to install
+    default: main
+  comment:
+    description: Post / update a sticky PR comment with the report
+    default: "true"
+
+outputs:
+  passed:
+    description: "true if the gate passed"
+    value: ${{ steps.gate.outputs.passed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install agent-reliability-harness
+      shell: bash
+      run: pip install "agent-reliability-harness @ git+https://github.com/djmoore-projects/agent-reliability-harness@${{ inputs.harness-ref }}"
+
+    - name: Run suite
+      shell: bash
+      run: |
+        agent-harness run "${{ inputs.suite }}" --out agent-eval/candidate.json --label "pr-${{ github.event.pull_request.number || github.sha }}" \
+          --trials "${{ inputs.trials }}" --concurrency "${{ inputs.concurrency }}" --repo-dir . ${{ inputs.extra-args }}
+
+    - name: Compare against baseline
+      id: gate
+      shell: bash
+      run: |
+        set +e
+        agent-harness compare "${{ inputs.baseline }}" agent-eval/candidate.json --suite "${{ inputs.suite }}" \
+          --markdown-out agent-eval/gate.md
+        code=$?
+        echo "passed=$([ $code -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Upload reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: agent-eval-report
+        path: agent-eval/
+
+    - name: Comment on PR
+      if: always() && inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        echo "<!-- agent-reliability-gate -->" | cat - agent-eval/gate.md > agent-eval/comment.md
+        gh pr comment "${{ github.event.pull_request.number }}" --edit-last -F agent-eval/comment.md \
+          || gh pr comment "${{ github.event.pull_request.number }}" -F agent-eval/comment.md
+
+    - name: Enforce gate
+      shell: bash
+      run: exit ${{ steps.gate.outputs.code }}

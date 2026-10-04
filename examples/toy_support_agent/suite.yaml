@@ -1,0 +1,68 @@
+# Offline demo suite: runs in CI with no API keys.
+#   agent-harness run examples/toy_support_agent/suite.yaml --out runs/toy.json --no-judge
+name: toy-support-agent
+adapter: adapter:run
+
+gate:
+  min_success_rate: 0.9
+  max_success_drop: 0.0
+  max_cost_increase_pct: 25
+  max_latency_increase_pct: null  # millisecond-scale toy runs; latency % is noise here
+  fail_on_task_regression: true
+
+shared_checks:
+  - type: budget
+    max_steps: 8
+    max_cost_usd: 0.01
+
+tasks:
+  - id: refund-eligible
+    description: Small, recent, delivered order. Should look up, then refund the exact amount.
+    input: { message: "Hi, I'd like a refund for order A100 please." }
+    checks:
+      - { type: node_path, includes: [agent, tools] }
+      - { type: tool_calls, tool: lookup_order, min: 1, max: 1 }
+      - { type: tool_calls, tool: issue_refund, min: 1, max: 1 }
+      - { type: tools_used, must_not_use: [escalate_to_human] }
+      - { type: field, name: refund-recorded, path: env.ledger.0, equals: { action: refund, order_id: A100, amount: 42.5 } }
+      - { type: field, name: one-side-effect, path: env.ledger, max_len: 1 }
+
+  - id: refund-over-limit-escalates
+    description: Amount over $100 must go to a human, never auto-refunded.
+    input: { message: "Please refund order A200, it arrived damaged." }
+    checks:
+      - { type: tool_calls, tool: lookup_order, min: 1 }
+      - { type: tools_used, must_use: [escalate_to_human], must_not_use: [issue_refund] }
+      - { type: field, name: escalation-recorded, path: env.ledger.0.action, equals: escalate }
+
+  - id: outside-window-declines
+    description: Delivered 64 days ago. Decline with the reason; no side effects.
+    input: { message: "Can I get my money back for A300?" }
+    checks:
+      - { type: tools_used, must_use: [lookup_order], must_not_use: [issue_refund, escalate_to_human] }
+      - { type: field, name: no-side-effects, path: env.ledger, max_len: 0 }
+      - { type: field, name: explains-window, path: state.reply, contains_any: ["30-day", "window"] }
+
+  - id: not-delivered-declines
+    input: { message: "Refund A400 please" }
+    checks:
+      - { type: tools_used, must_not_use: [issue_refund] }
+      - { type: field, path: state.reply, matches: "not been delivered|hasn't been delivered" }
+
+  - id: lookup-outage-recovers
+    description: The order system fails once. The agent should retry and still refund correctly.
+    input: { message: "Refund for order A100 please" }
+    faults:
+      - { target: tool, name: lookup_order, times: 1, error: "503 Service Unavailable" }
+    checks:
+      - { type: tool_calls, tool: lookup_order, min: 2, max: 2 }
+      - { type: field, path: env.ledger.0.action, equals: refund }
+
+  - id: lookup-hard-down-escalates
+    description: The order system is down for the whole run. Escalate instead of refunding blind.
+    input: { message: "Refund for order A100 please" }
+    faults:
+      - { target: tool, name: lookup_order, times: -1, error: "503 Service Unavailable" }
+    checks:
+      - { type: tools_used, must_use: [escalate_to_human], must_not_use: [issue_refund] }
+      - { type: tool_calls, tool: lookup_order, max: 2 }

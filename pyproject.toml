@@ -1,0 +1,34 @@
+[project]
+name = "agent-reliability-harness"
+version = "0.1.0"
+description = "Evals, tracing and CI regression gates for tool-using agents"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.0",
+    "langchain-core>=0.3",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+langgraph = ["langgraph>=0.6"]
+dev = ["pytest>=8", "ruff", "langgraph>=0.6", "python-dotenv"]
+
+[project.scripts]
+agent-harness = "agent_harness.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agent_harness*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
