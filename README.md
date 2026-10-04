@@ -44,7 +44,7 @@ The baseline run is **partial**. The API key ran out of credit partway through,
 and the harness flagged the 15 affected trials as infrastructure errors and
 excluded them instead of counting them against the agent (see design notes).
 The fixes are in
-[the PR](https://github.com/djmoore-projects/b2b-account-pipeline/pulls): a search-count budget, resume from the failed node,
+[b2b-account-pipeline PR #1](https://github.com/djmoore-projects/b2b-account-pipeline/pull/1): a search-count budget, resume from the failed node,
 a code-enforced outreach contract with one repair pass, and an entity-grounding
 instruction. **The after-fix run is pending.** This README will only show
 after-fix numbers once that run has been done.
