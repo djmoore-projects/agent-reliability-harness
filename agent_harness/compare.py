@@ -42,6 +42,10 @@ def compare(baseline: RunResult, candidate: RunResult, gate: GateConfig) -> Gate
     if gate.max_latency_increase_pct is not None and lat_delta > gate.max_latency_increase_pct:
         breaches.append(f"p95 latency up {lat_delta:.0f}% (limit {gate.max_latency_increase_pct:.0f}%)")
 
+    for label, stats in (("baseline", b), ("candidate", c)):
+        if stats["excluded_infra_trials"]:
+            breaches.append(f"{label} has {stats['excluded_infra_trials']} trial(s) lost to infrastructure errors; re-run")
+
     shared = sorted(set(b["per_task"]) & set(c["per_task"]))
     regressions = [t for t in shared if _task_passes(b["per_task"][t]) and not _task_passes(c["per_task"][t])]
     fixes = [t for t in shared if not _task_passes(b["per_task"][t]) and _task_passes(c["per_task"][t])]

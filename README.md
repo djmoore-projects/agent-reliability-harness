@@ -17,7 +17,38 @@ that project grades RAG *answers*; this one grades agent *runs*. Same
 philosophy — typed contracts, structured judge outputs, scores computed in
 Python rather than reported by a model.
 
-<!-- RESULTS -->
+## First real target: b2b-account-pipeline
+
+The harness was built against
+[b2b-account-pipeline](https://github.com/djmoore-projects/b2b-account-pipeline),
+a LangGraph agent that researches a company with Claude + Tavily, writes a
+3-step outreach sequence and syncs a CRM record. Its README says it "works"
+and shows a clean run. The 11-task suite
+([`evals/suite.yaml`](https://github.com/djmoore-projects/b2b-account-pipeline/blob/agent-reliability-evals/evals/suite.yaml))
+checks only the contract the pipeline states for itself, and the checks were
+frozen before the baseline ran.
+
+**Baseline: 17% task success** (3/18 clean trials, 95% CI 6–39%). **All 13 clean
+happy-path trials failed:**
+
+- `[Name]` / `[Your Name]` placeholders in outreach that is meant to be sent as-is: **13/13**
+- More than the stated 3 searches: **4/13**. The loop capped *iterations*, but Claude makes parallel tool calls inside one iteration.
+- Research claims not supported by what the searches returned (faithfulness < 0.8): **3/14**
+- A fictional company was assigned a similarly named real company's executives, funding and news
+- One injected LLM error in the outreach step re-ran all research: **8 searches, 108s, $0.41** against a typical $0.18
+
+The fault-injection tasks passed: the agent retries a transient search outage
+and fails cleanly when search is down for the whole run.
+
+The baseline run is **partial**. The API key ran out of credit partway through,
+and the harness flagged the 15 affected trials as infrastructure errors and
+excluded them instead of counting them against the agent (see design notes).
+The fixes are in
+[the PR](https://github.com/djmoore-projects/b2b-account-pipeline/pulls): a search-count budget, resume from the failed node,
+a code-enforced outreach contract with one repair pass, and an entity-grounding
+instruction. **The after-fix run is pending.** This README will only show
+after-fix numbers once that run has been done.
+
 
 ## What it measures
 
@@ -170,6 +201,11 @@ regression must be blocked.
 - **Deterministic checks first, judges last.** Cheap structural checks run on
   every trial; judge calls are skipped when the run already crashed, and judge
   spend is tracked separately from agent spend.
+- **Infrastructure errors aren't agent failures.** Auth, billing and quota
+  errors from the model provider are detected in the trace. The trial is
+  flagged, excluded from every metric, and the remaining trials are skipped.
+  `run` exits 2, and `compare` refuses to pass a gate on an incomplete run.
+  This came out of a real run that ran out of API credit halfway through.
 - **Broken checks fail closed.** An unknown check type or a judge error is a
   failed check with the error attached, never a silent pass.
 - **Judge on Claude with structured outputs.** `messages.parse` with Pydantic

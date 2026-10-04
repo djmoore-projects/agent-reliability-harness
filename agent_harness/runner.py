@@ -7,6 +7,7 @@ import logging
 import string
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -18,7 +19,7 @@ import yaml
 
 from .checks import TaskContext, run_check
 from .judge import Judge
-from .schema import RunResult, Suite, Task, TrialResult
+from .schema import RunResult, Suite, Task, Trace, TrialResult
 from .tracing import Tracer
 
 logger = logging.getLogger("agent_harness")
@@ -49,6 +50,25 @@ def _git_sha(cwd: Path | None = None) -> str | None:
         return None
 
 
+# Errors that mean the run says nothing about the agent: the provider refused to serve it.
+INFRA_ERROR_PATTERNS = (
+    "credit balance is too low",
+    "authentication_error",
+    "invalid x-api-key",
+    "permission_error",
+    "insufficient_quota",
+)
+
+
+def _find_infra_error(*texts: str | None) -> str | None:
+    for text in texts:
+        lowered = (text or "").lower()
+        for pattern in INFRA_ERROR_PATTERNS:
+            if pattern in lowered:
+                return pattern
+    return None
+
+
 def _render(spec: Any, variables: dict) -> Any:
     """Substitute ${var} from the task input into check specs, so shared checks can say
     e.g. `equals: ${company_name}`."""
@@ -61,7 +81,10 @@ def _render(spec: Any, variables: dict) -> Any:
     return spec
 
 
-def run_trial(suite: Suite, task: Task, trial: int, adapter: Adapter, judge_client: Any) -> TrialResult:
+def run_trial(suite: Suite, task: Task, trial: int, adapter: Adapter, judge_client: Any,
+              abort: threading.Event | None = None) -> TrialResult:
+    if abort is not None and abort.is_set():
+        return _skipped(task, trial, "skipped: run aborted after an infrastructure error")
     tracer = Tracer(faults=task.faults)
     task_input = {**suite.defaults, **task.input}
     start = time.perf_counter()
@@ -92,8 +115,14 @@ def run_trial(suite: Suite, task: Task, trial: int, adapter: Adapter, judge_clie
             continue
         results.append(run_check(ctx, spec))
 
+    # Only error channels are scanned, never agent output (research about "Stripe Billing" isn't an outage).
+    infra = _find_infra_error(crashed, *(sp.error for sp in trace.spans), *(r.error for r in results))
+    if infra and abort is not None:
+        abort.set()
+        logger.error("Infrastructure error (%s) on %s; aborting remaining trials", infra, task.id)
+
     input_tokens, output_tokens = trace.tokens
-    success = all(r.passed for r in results if r.required)
+    success = all(r.passed for r in results if r.required) and not infra
     logger.info("%-28s trial %d  %s  %5.1fs  $%.4f  %d steps", task.id, trial,
                 "PASS" if success else "FAIL", latency, cost, trace.steps)
     return TrialResult(
@@ -102,8 +131,14 @@ def run_trial(suite: Suite, task: Task, trial: int, adapter: Adapter, judge_clie
         llm_calls=len(trace.llm_calls), tool_calls=len(trace.tool_calls),
         input_tokens=input_tokens, output_tokens=output_tokens, node_path=trace.node_path,
         output={k: v for k, v in output.items() if k in ("state", "env", "__crashed__")},
-        trace=trace, crashed=crashed,
+        trace=trace, crashed=crashed, infra_error=infra,
     )
+
+
+def _skipped(task: Task, trial: int, reason: str) -> TrialResult:
+    return TrialResult(task_id=task.id, trial=trial, success=False, checks=[], latency_s=0.0, cost_usd=0.0,
+                       steps=0, llm_calls=0, tool_calls=0, input_tokens=0, output_tokens=0, node_path=[],
+                       trace=Trace(), infra_error=reason)
 
 
 def run_suite(suite: Suite, *, label: str, trials: int = 1, concurrency: int = 4, use_judge: bool = True,
@@ -117,8 +152,9 @@ def run_suite(suite: Suite, *, label: str, trials: int = 1, concurrency: int = 4
 
     tasks = [t for t in suite.tasks if not task_filter or t.id in task_filter]
     jobs = [(t, k) for k in range(trials) for t in tasks]
+    abort = threading.Event()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        results = list(pool.map(lambda job: run_trial(suite, job[0], job[1], adapter, judge_client), jobs))
+        results = list(pool.map(lambda job: run_trial(suite, job[0], job[1], adapter, judge_client, abort), jobs))
 
     return RunResult(
         suite=suite.name, label=label, created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),

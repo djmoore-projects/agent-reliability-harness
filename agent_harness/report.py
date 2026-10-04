@@ -35,6 +35,9 @@ def to_markdown(run: RunResult) -> str:
         f"| Mean steps | {s['mean_steps']:.1f} ({s['mean_llm_calls']:.1f} LLM, {s['mean_tool_calls']:.1f} tool) |",
         "",
     ]
+    if s["excluded_infra_trials"]:
+        lines += [(f"⚠️ **{s['excluded_infra_trials']} trial(s) excluded** for provider/infrastructure errors "
+                   "(auth, billing, quota). They say nothing about the agent; re-run before trusting these numbers."), ""]
     if s["flaky_tasks"]:
         lines += [f"**Flaky tasks** (mixed results across trials): {', '.join(f'`{t}`' for t in s['flaky_tasks'])}", ""]
     if s["top_failures"]:
@@ -47,7 +50,7 @@ def to_markdown(run: RunResult) -> str:
                      f"{t['mean_latency_s']:.1f}s | {t['mean_steps']:.1f} |")
     lines.append("")
 
-    failed = [t for t in run.trials if not t.success]
+    failed = [t for t in run.trials if not t.success and not t.infra_error]
     if failed:
         lines += ["## Failure details", ""]
         for t in failed:

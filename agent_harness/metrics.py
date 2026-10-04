@@ -35,15 +35,20 @@ def _category_rate(trials: list[TrialResult], category: str) -> float | None:
     return sum(c.passed for c in checks) / len(checks) if checks else None
 
 
+def valid_trials(run: RunResult) -> list[TrialResult]:
+    """Trials that actually tested the agent (excludes provider auth/billing/quota failures)."""
+    return [t for t in run.trials if not t.infra_error]
+
+
 def by_task(run: RunResult) -> dict[str, list[TrialResult]]:
     grouped: dict[str, list[TrialResult]] = defaultdict(list)
-    for t in run.trials:
+    for t in valid_trials(run):
         grouped[t.task_id].append(t)
     return dict(grouped)
 
 
 def summarize(run: RunResult) -> dict[str, Any]:
-    trials = run.trials
+    trials = valid_trials(run)
     tasks = by_task(run)
     n = len(trials)
     passes = sum(t.success for t in trials)
@@ -68,6 +73,7 @@ def summarize(run: RunResult) -> dict[str, Any]:
     return {
         "tasks": len(tasks),
         "trials": n,
+        "excluded_infra_trials": len(run.trials) - n,
         "trials_per_task": run.trials_per_task,
         "success_rate": passes / n if n else 0.0,
         "success_ci95": [lo, hi],

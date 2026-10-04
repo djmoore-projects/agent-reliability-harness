@@ -37,6 +37,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     out.with_suffix(".html").write_text(to_html(run))
     print(md.split("## Per task")[0])
     print(f"Wrote {out}, {out.with_suffix('.md')}, {out.with_suffix('.html')}")
+    infra = [t for t in run.trials if t.infra_error]
+    if infra:
+        print(f"ERROR: {len(infra)} trial(s) hit infrastructure errors (e.g. {infra[0].infra_error}); results are incomplete.")
+        return 2
     return 0
 
 

@@ -143,3 +143,15 @@ def test_gate_catches_planted_regression(toy_suite, good_run, buggy_run):
     assert not outcome.passed
     assert "refund-over-limit-escalates" in outcome.regressions
     assert "Agent quality gate failed" in outcome.markdown
+
+
+def test_infra_errors_are_excluded_not_scored(good_run):
+    from agent_harness.runner import _find_infra_error
+    assert _find_infra_error("Error code: 400 - Your credit balance is too low") == "credit balance is too low"
+    assert _find_infra_error("Stripe Billing launched usage-based pricing") is None
+    run = good_run.model_copy(deep=True)
+    run.trials[0].infra_error = "credit balance is too low"
+    run.trials[0].success = False
+    s = summarize(run)
+    assert s["excluded_infra_trials"] == 1 and s["success_rate"] == 1.0
+    assert not compare(good_run, run, GateConfig()).passed  # an incomplete run can't pass the gate

@@ -144,6 +144,8 @@ class TrialResult(BaseModel):
     output: dict[str, Any] = Field(default_factory=dict)
     trace: Trace
     crashed: str | None = None  # adapter raised instead of returning
+    # Provider/infra failure (auth, billing, quota) — not the agent's fault. Excluded from metrics.
+    infra_error: str | None = None
 
 
 class RunResult(BaseModel):
